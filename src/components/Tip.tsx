@@ -20,8 +20,13 @@ export function Tip({ onConfirm, onUpdate, initialEmoji, onDelete }: Props) {
   }, [onUpdate]);
 
   const handleEmojiChange = (value: string) => {
-    setEmoji(value);
-    onConfirm({ text: "", emoji: value });
+    // Only call onConfirm if the value is actually changing
+    // This prevents redundant updates and ensures clean replacement
+    if (emoji !== value) {
+      setEmoji(value);
+      // Clear any previous emoji designation and use the new one
+      onConfirm({ text: "", emoji: value });
+    }
   };
 
   return (

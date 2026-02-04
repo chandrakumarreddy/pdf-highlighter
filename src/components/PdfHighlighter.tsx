@@ -191,6 +191,10 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
       return;
     }
     if (prevProps.highlights !== this.props.highlights) {
+      // Clear the highlight group cache when highlights change
+      this.highlightGroupCache.clear();
+      // Don't clear visiblePageNumbers - it causes full PDF re-render
+      // Instead, render highlight layers for visible pages only
       this.renderHighlightLayers();
     }
   }
@@ -226,6 +230,51 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
     this.viewer.setDocument(pdfDocument);
 
     this.attachRef(eventBus);
+
+    // Disable virtualization by rendering all pages
+    // This ensures pages are not unloaded when scrolling
+    this.renderAllPages();
+  }
+
+  /**
+   * Render all pages to disable virtualization
+   * This keeps all pages in memory regardless of scroll position
+   */
+  private async renderAllPages() {
+    const { pdfDocument } = this.props;
+    if (!pdfDocument || !this.viewer) return;
+
+    const numPages = pdfDocument.numPages;
+    console.log(`Rendering all ${numPages} pages to disable virtualization`);
+
+    // Wait a bit for the viewer to initialize
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Access the internal rendering queue to modify buffer size
+    const renderingQueue = (this.viewer as any).renderingQueue;
+    if (renderingQueue) {
+      // Increase the buffer size to keep all pages in memory
+      // Default is typically 2-3 pages in each direction
+      renderingQueue.highestPriorityPage = 0;
+      renderingQueue.bufferSize = numPages * 2; // Buffer size for pages to keep rendered
+      console.log(`Set rendering queue buffer size to ${renderingQueue.bufferSize}`);
+    }
+
+    // Render each page explicitly
+    for (let i = 1; i <= numPages; i++) {
+      const pageView = this.viewer.getPageView(i - 1);
+      if (pageView && !pageView.rendering && !pageView.rendered) {
+        // Draw the page view to force rendering
+        try {
+          await pageView.draw();
+          console.log(`Rendered page ${i}`);
+        } catch (error) {
+          console.warn(`Failed to render page ${i}:`, error);
+        }
+      }
+    }
+
+    console.log("All pages rendered, virtualization disabled");
   }
 
   componentWillUnmount() {
@@ -590,43 +639,58 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
     const yContinuationThreshold = 18; // pixels - wrapped text continuation (increased for better paragraph detection)
     const xGapThreshold = 30; // pixels - x gaps larger than this indicate different column/section
 
-    // Helper to check if two spans are likely in the same text flow (same column/paragraph)
-    const areSpansConnected = (span2Index: number, baseRect: DOMRect): boolean => {
-      const rect2 = cachedSpans![span2Index].rect;
-
-      // Check y-position alignment (same or next line for wrapped text)
-      const yAligned = Math.abs(rect2.top - baseRect.top) <= yThreshold ||
-                      Math.abs(rect2.bottom - baseRect.top) <= yContinuationThreshold ||
-                      Math.abs(rect2.top - baseRect.bottom) <= yContinuationThreshold;
-
-      if (!yAligned) return false;
-
-      // Check x-position (no large gaps that would indicate different column)
-      // Spans should overlap horizontally or be close
-      const horizontalOverlap = !(rect2.right < baseRect.left - xGapThreshold ||
-                                 rect2.left > baseRect.right + xGapThreshold);
-
-      return horizontalOverlap;
-    };
-
     // Find the first span of the paragraph by going backward
+    // When going backward, only include if the span ends close to where we start (not if it starts above)
     let startIndex = clickedIndex;
     let currentRect = clickedRect;
     while (startIndex > 0) {
-      if (!areSpansConnected(startIndex - 1, currentRect)) {
+      const prevRect = cachedSpans[startIndex - 1].rect;
+
+      // Check if the previous span is part of the same text flow
+      // For backward traversal: the previous span's bottom should be close to current span's top
+      // (the previous line should end right before the current line starts)
+      const yConnected =
+        // Same line (very close tops)
+        Math.abs(prevRect.top - currentRect.top) <= yThreshold ||
+        // Previous span ends right before current span starts (line above that connects)
+        Math.abs(prevRect.bottom - currentRect.top) <= yContinuationThreshold;
+
+      // Check x-position (no large gaps that would indicate different column)
+      const horizontalOverlap = !(prevRect.right < currentRect.left - xGapThreshold ||
+                                 prevRect.left > currentRect.right + xGapThreshold);
+
+      if (!yConnected || !horizontalOverlap) {
         break;
       }
+
       startIndex--;
       currentRect = cachedSpans[startIndex].rect;
     }
 
     // Find the last span of the paragraph by going forward
+    // When going forward, only include if the span starts close to where we end (not if it ends below)
     let endIndex = clickedIndex;
     currentRect = clickedRect;
     while (endIndex < cachedSpans.length - 1) {
-      if (!areSpansConnected(endIndex + 1, currentRect)) {
+      const nextRect = cachedSpans[endIndex + 1].rect;
+
+      // Check if the next span is part of the same text flow
+      // For forward traversal: the next span's top should be close to current span's bottom
+      // (the next line should start right after the current line ends)
+      const yConnected =
+        // Same line (very close tops)
+        Math.abs(nextRect.top - currentRect.top) <= yThreshold ||
+        // Next span starts right after current span ends (line below that connects)
+        Math.abs(nextRect.top - currentRect.bottom) <= yContinuationThreshold;
+
+      // Check x-position (no large gaps that would indicate different column)
+      const horizontalOverlap = !(nextRect.right < currentRect.left - xGapThreshold ||
+                                 nextRect.left > currentRect.right + xGapThreshold);
+
+      if (!yConnected || !horizontalOverlap) {
         break;
       }
+
       endIndex++;
       currentRect = cachedSpans[endIndex].rect;
     }
@@ -1014,6 +1078,26 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
    * This method can be called by parent components to trigger similarity search
    */
   async findSimilarSections(options: Omit<SimilaritySearchOptions, "pdfDocument" | "viewer">): Promise<SimilarityResult[]> {
+    console.log("PdfHighlighter.findSimilarSections called", {
+      hasPdfDocument: !!this.props.pdfDocument,
+      hasViewer: !!this.viewer,
+      options: {
+        selectedText: options.selectedText?.substring(0, 50),
+        threshold: options.threshold,
+        maxResults: options.maxResults,
+      },
+    });
+
+    if (!this.props.pdfDocument) {
+      console.error("PDF document not available");
+      return [];
+    }
+
+    if (!this.viewer) {
+      console.error("PDF viewer not initialized");
+      return [];
+    }
+
     return findSimilarSections({
       ...options,
       pdfDocument: this.props.pdfDocument,

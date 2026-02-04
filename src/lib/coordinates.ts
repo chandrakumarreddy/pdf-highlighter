@@ -69,11 +69,29 @@ export const scaledToViewport = (
   const x2 = (width * scaled.x2) / scaled.width;
   const y2 = (height * scaled.y2) / scaled.height;
 
-  return {
+  const result: LTWHP = {
     left: x1,
     top: y1,
     width: x2 - x1,
     height: y2 - y1,
     pageNumber: scaled.pageNumber,
   };
+
+  // Clamp coordinates to viewport bounds to prevent out-of-bounds rendering
+  if (result.left < 0) {
+    result.width = Math.max(0, result.width + result.left);
+    result.left = 0;
+  }
+  if (result.top < 0) {
+    result.height = Math.max(0, result.height + result.top);
+    result.top = 0;
+  }
+  if (result.left + result.width > width) {
+    result.width = Math.max(0, width - result.left);
+  }
+  if (result.top + result.height > height) {
+    result.height = Math.max(0, height - result.top);
+  }
+
+  return result;
 };

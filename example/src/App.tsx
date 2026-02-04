@@ -25,8 +25,8 @@ const testHighlights: Record<string, Array<IHighlight>> = {};
 
 const getNextId = () => String(Math.random()).slice(2);
 
-// Similarity search threshold (0.60 = 60% structural similarity)
-const SIMILARITY_THRESHOLD = 0.60;
+// Similarity search threshold (0.75 = 75% similarity required)
+const SIMILARITY_THRESHOLD = 0.75;
 
 const parseIdFromHash = () =>
   document.location.hash.slice("#highlight-".length);
@@ -99,43 +99,62 @@ export function App() {
   ) => {
     const { content, position, comment } = highlight;
 
+    console.log("=== handleHighlightWithSimilarity called ===", {
+      contentText: content.text?.substring(0, 50),
+      positionPageNumber: position.pageNumber,
+      hasRef: !!pdfHighlighterRef.current,
+    });
+
     // Hide the tip and clear the ghost highlight first
     hideTipAndSelection();
 
     // Only search for similar sections if it's a text highlight (not image)
     if (!content.text || content.text.length < 15) {
+      console.log(
+        "Text too short for similarity search, adding single highlight",
+      );
       // Text too short, just add the single highlight
       addHighlight(highlight);
       return;
     }
 
+    console.log("Adding original highlight");
     // Add the original highlight first
     addHighlight(highlight);
 
     // Search for similar sections
     if (pdfHighlighterRef.current) {
+      console.log("Starting similarity search...");
       setIsSearchingSimilar(true);
       try {
-        const similarSections = await pdfHighlighterRef.current.findSimilarSections({
-          selectedText: content.text,
-          selectedPosition: position,
-          threshold: SIMILARITY_THRESHOLD,
-          maxResults: 20,
-          onProgress: (current: number, total: number, found: number) => {
-            console.log(`Searching similar sections: page ${current}/${total}, found ${found}`);
-          },
-        });
+        const similarSections =
+          await pdfHighlighterRef.current.findSimilarSections({
+            selectedText: content.text,
+            selectedPosition: position,
+            threshold: SIMILARITY_THRESHOLD,
+            maxResults: 20,
+            onProgress: (current: number, total: number, found: number) => {
+              console.log(
+                `Searching similar sections: page ${current}/${total}, found ${found}`,
+              );
+            },
+          });
+
+        console.log("Similar sections found:", similarSections.length);
 
         // Create highlights for all similar sections
-        const similarHighlights: NewHighlight[] = similarSections.map((result: any) => ({
-          content: { text: result.text },
-          position: result.position,
-          comment: {
-            ...comment,
-            text: `Similar (${Math.round(result.score * 100)}%)`,
-          },
-        }));
+        const similarHighlights: NewHighlight[] = similarSections.map(
+          (result: any) => ({
+            content: { text: result.text },
+            position: result.position,
+            comment: {
+              ...comment,
+              text: `Similar (${Math.round(result.score * 100)}%)`,
+            },
+          }),
+        );
 
+        console.log("Adding similar highlights:", similarHighlights.length);
         if (similarHighlights.length > 0) {
           addHighlights(similarHighlights);
           console.log(`Added ${similarHighlights.length} similar highlights`);
@@ -145,6 +164,8 @@ export function App() {
       } finally {
         setIsSearchingSimilar(false);
       }
+    } else {
+      console.error("pdfHighlighterRef.current is null!");
     }
   };
 
@@ -201,14 +222,19 @@ export function App() {
       className="App"
       style={{ display: "flex", height: "100vh", width: "100vw" }}
     >
+      <Sidebar
+        highlights={highlights}
+        resetHighlights={resetHighlights}
+        toggleDocument={toggleDocument}
+      />
       <div
         style={{
           flex: 1,
-          border: "2px solid #fff",
-          margin: "32px auto",
+          border: "1px solid #fff",
+          margin: "8px auto",
           overflow: "hidden",
-          borderRadius: 16,
-          padding: 8,
+          borderRadius: 8,
+          padding: 4,
           maxWidth: 1000,
         }}
       >
@@ -333,11 +359,6 @@ export function App() {
           )}
         </div>
       </div>
-      {/* <Sidebar
-        highlights={highlights}
-        resetHighlights={resetHighlights}
-        toggleDocument={toggleDocument}
-      /> */}
     </div>
   );
 }

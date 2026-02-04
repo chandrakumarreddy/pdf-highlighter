@@ -3,24 +3,18 @@
  * Compares actual DOM text layer elements to find structurally similar sections
  */
 
-import type { PDFViewer } from "pdfjs-dist/web/pdf_viewer.mjs";
 import { viewportToScaled } from "./coordinates";
-import { extractAllTextElements, findNodeGroupAtPosition, findSimilarNodeGroups, groupTextElementsIntoSections, type TextElementGroup } from "./pdf-node-comparator";
-import type { ScaledPosition, SimilarityResult } from "../types";
-
-/**
- * Options for similarity search using DOM node comparison
- */
-export interface SimilaritySearchOptions {
-  selectedText: string;
-  selectedPosition: ScaledPosition;
-  pdfDocument: any;
-  viewer: PDFViewer;
-  threshold?: number; // default 0.60 (60% structural similarity)
-  maxResults?: number; // default 20
-  maxPages?: number; // default 50
-  onProgress?: (current: number, total: number, found: number) => void;
-}
+import {
+  extractAllTextElements,
+  findNodeGroupAtPosition,
+  findSimilarNodeGroups,
+  groupTextElementsIntoSections,
+  type TextElementGroup,
+} from "./pdf-node-comparator";
+import type {
+  SimilarityResult,
+  SimilaritySearchOptions,
+} from "../types";
 
 /**
  * Find similar sections across a PDF document using DOM text element comparison
@@ -37,7 +31,7 @@ export async function findSimilarSections(
     selectedPosition,
     pdfDocument,
     viewer,
-    threshold = 0.60,
+    threshold = 0.75,
     maxResults = 20,
     maxPages = 50,
     onProgress,
@@ -51,8 +45,27 @@ export async function findSimilarSections(
     return [];
   }
 
-  // Limit number of pages to search for performance
-  const numPages = Math.min(pdfDocument.numPages, maxPages);
+  // Determine the range of pages to search
+  // We want to search up to maxPages, centered around the current page
+  const totalPages = pdfDocument.numPages;
+  const currentPage = selectedPosition.pageNumber;
+
+  let startPage = Math.max(1, currentPage - Math.floor(maxPages / 2));
+  let endPage = Math.min(totalPages, startPage + maxPages - 1);
+
+  // Adjust range if we're near the beginning or end
+  if (endPage - startPage + 1 < maxPages) {
+    if (startPage === 1) {
+      endPage = Math.min(totalPages, maxPages);
+    } else if (endPage === totalPages) {
+      startPage = Math.max(1, totalPages - maxPages + 1);
+    }
+  }
+
+  const pagesToSearch: number[] = [];
+  for (let p = startPage; p <= endPage; p++) {
+    pagesToSearch.push(p);
+  }
 
   // Get the viewer container for DOM extraction
   const container = viewer.container;
@@ -62,67 +75,81 @@ export async function findSimilarSections(
   }
 
   console.log("=== Starting similarity search ===:", {
-    selectedText: selectedText.substring(0, 50) + (selectedText.length > 50 ? "..." : ""),
-    numPages,
+    selectedText:
+      selectedText.substring(0, 50) + (selectedText.length > 50 ? "..." : ""),
+    searchingPages: `${startPage}-${endPage}`,
+    totalPages,
     threshold,
-    selectedPosition: {
-      pageNumber: selectedPosition.pageNumber,
-      boundingRect: selectedPosition.boundingRect,
+    currentPage,
+  });
+
+  // Extract text elements from DOM (all pages are now rendered since we disabled virtualization)
+  console.log("=== Extracting text elements from DOM ===");
+  const elementsMap = extractAllTextElements(
+    container,
+    pagesToSearch,
+    (current, total) => {
+      onProgress?.(current, total, 0);
     },
-  });
+  );
+  console.log("=== Text extraction complete ===");
 
-  // Extract all text elements from DOM
-  onProgress?.(0, numPages, 0);
-
-  const elementsMap = await extractAllTextElements(container, numPages, (current, total) => {
-    onProgress?.(current, total, 0);
-  });
-
-  console.log("=== Extracted text elements ===:", Array.from(elementsMap.entries()).map(([page, elements]) => [page, elements.length]));
+  console.log(
+    "=== Extracted text elements from pages ===:",
+    Array.from(elementsMap.entries()).map(([page, elements]) => [
+      page,
+      elements.length,
+    ]),
+  );
 
   // Group elements into sections (lines/paragraphs)
   const allGroups: TextElementGroup[] = [];
   for (const [pageIndex, elements] of elementsMap.entries()) {
+    console.log(
+      `Debug: Processing page ${pageIndex}, elements count: ${elements.length}, first element pageNumber: ${elements[0]?.pageNumber}`,
+    );
     const groups = groupTextElementsIntoSections(elements);
-    console.log(`Page ${pageIndex}: ${groups.length} groups from ${elements.length} elements`);
+    console.log(
+      `Debug: Created ${groups.length} groups for page ${pageIndex}, group pageNumbers:`,
+      groups.map((g) => g.pageNumber),
+    );
     allGroups.push(...groups);
   }
 
   console.log("=== Total groups created:", allGroups.length, "===");
 
-  onProgress?.(numPages, numPages, 0);
-
   // Find the reference group that matches the selected position
-  const pageView = viewer.getPageView(selectedPosition.pageNumber - 1);
+  const pageView = viewer.getPageView(currentPage - 1);
   if (!pageView || !pageView.viewport) {
-    console.error("Could not get page view for page:", selectedPosition.pageNumber);
+    console.error("Could not get page view for page:", currentPage);
     return [];
   }
 
   const viewport = pageView.viewport;
-  console.log("Viewport for page", selectedPosition.pageNumber, ":", { width: viewport.width, height: viewport.height });
 
   const referenceGroup = findNodeGroupAtPosition(
     allGroups,
-    selectedPosition.pageNumber,
+    currentPage,
     selectedPosition,
     viewport,
   );
 
   if (!referenceGroup) {
     console.warn("Could not find reference node group at selected position");
-    // Log all groups on this page for debugging
-    const pageGroups = allGroups.filter(g => g.pageNumber === selectedPosition.pageNumber);
-    console.log("Available groups on page", selectedPosition.pageNumber, ":", pageGroups.map(g => ({ text: g.text.substring(0, 30), bounds: g.bounds, signature: g.signature })));
     return [];
   }
 
-  console.log("=== Reference group found ===:", {
-    text: referenceGroup.text.substring(0, 50) + (referenceGroup.text.length > 50 ? "..." : ""),
-    signature: referenceGroup.signature,
-    elementCount: referenceGroup.elements.length,
-    bounds: referenceGroup.bounds,
-  }, "===");
+  console.log(
+    "=== Reference group found ===:",
+    {
+      text:
+        referenceGroup.text.substring(0, 50) +
+        (referenceGroup.text.length > 50 ? "..." : ""),
+      signature: referenceGroup.signature,
+      elementCount: referenceGroup.elements.length,
+    },
+    "===",
+  );
 
   // Find similar groups using structural comparison
   const similarGroups = findSimilarNodeGroups(
@@ -134,52 +161,51 @@ export async function findSimilarSections(
 
   console.log("=== Similar groups found:", similarGroups.length, "===");
 
-  onProgress?.(numPages, numPages, similarGroups.length);
-
   // Convert results to the expected format
+  // The convertGroupToViewportCoordinates returns viewport coordinates (left, top, width, height)
+  // We convert these to scaled coordinates using viewportToScaled
   const results: SimilarityResult[] = [];
 
   for (const similar of similarGroups) {
-    console.log("Processing similar group:", {
-      text: similar.group.text.substring(0, 30) + (similar.group.text.length > 30 ? "..." : ""),
-      score: similar.score,
-      pageNumber: similar.group.pageNumber,
-    });
+    const sPageView = viewer.getPageView(similar.group.pageNumber - 1);
+    if (!sPageView || !sPageView.viewport) continue;
 
-    // Get the viewport for this page to convert coordinates
-    const pageView = viewer.getPageView(similar.group.pageNumber - 1);
-    if (!pageView || !pageView.viewport) {
-      console.warn("Could not get page view for page:", similar.group.pageNumber);
-      continue;
-    }
+    const sViewport = sPageView.viewport;
 
-    const viewport = pageView.viewport;
-
-    // Convert the position to scaled coordinates
+    // The position is now in viewport coordinates (left, top, width, height)
+    // Convert to scaled coordinates for the highlighter
     const scaledPosition = viewportToScaled(
       {
-        left: similar.position.boundingRect.x1,
-        top: similar.position.boundingRect.y1,
-        width: similar.position.boundingRect.x2 - similar.position.boundingRect.x1,
-        height: similar.position.boundingRect.y2 - similar.position.boundingRect.y1,
+        left: similar.position.boundingRect.left,
+        top: similar.position.boundingRect.top,
+        width: similar.position.boundingRect.width,
+        height: similar.position.boundingRect.height,
         pageNumber: similar.group.pageNumber,
       },
-      viewport,
+      sViewport,
     );
 
     // Convert all rects to scaled coordinates
     const scaledRects = similar.position.rects.map((rect) =>
       viewportToScaled(
         {
-          left: rect.x1,
-          top: rect.y1,
+          left: rect.left,
+          top: rect.top,
           width: rect.width,
           height: rect.height,
           pageNumber: similar.group.pageNumber,
         },
-        viewport,
+        sViewport,
       ),
     );
+
+    console.log("Similar section rect debug:", {
+      pageNumber: similar.group.pageNumber,
+      rectsCount: scaledRects.length,
+      firstRectPageNumber: scaledRects[0]?.pageNumber,
+      boundingRect: scaledPosition,
+      firstRect: scaledRects[0],
+    });
 
     results.push({
       text: similar.matchedText,
@@ -191,12 +217,9 @@ export async function findSimilarSections(
       },
     });
 
-    onProgress?.(numPages, numPages, results.length);
+    onProgress?.(pagesToSearch.length, pagesToSearch.length, results.length);
 
-    // Stop if we've found enough results
-    if (results.length >= maxResults) {
-      break;
-    }
+    if (results.length >= maxResults) break;
   }
 
   console.log("=== Final results:", results.length, "===");
