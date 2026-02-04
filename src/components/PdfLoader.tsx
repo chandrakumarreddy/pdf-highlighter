@@ -1,116 +1,135 @@
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import React, { Component } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
+const DEFAULT_WORKER_SRC =
+  "https://unpkg.com/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs";
 
 interface Props {
   /** See `GlobalWorkerOptionsType`. */
-  workerSrc: string;
+  workerSrc?: string;
 
   url: string;
-  beforeLoad: JSX.Element;
-  errorMessage?: JSX.Element;
-  children: (pdfDocument: PDFDocumentProxy) => JSX.Element;
+  beforeLoad: React.ReactElement;
+  errorMessage?: React.ReactElement;
+  children: (pdfDocument: PDFDocumentProxy) => React.ReactElement;
   onError?: (error: Error) => void;
   cMapUrl?: string;
   cMapPacked?: boolean;
 }
 
-interface State {
-  pdfDocument: PDFDocumentProxy | null;
-  error: Error | null;
-}
+export const PdfLoader: React.FC<Props> = ({
+  workerSrc = DEFAULT_WORKER_SRC,
+  url,
+  beforeLoad,
+  errorMessage,
+  children,
+  onError,
+  cMapUrl,
+  cMapPacked,
+}) => {
+  const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+  const documentRef = useRef<HTMLElement>(null);
+  const discardedDocumentRef = useRef<PDFDocumentProxy | null>(null);
+  const prevUrlRef = useRef<string | undefined>(undefined);
 
-export class PdfLoader extends Component<Props, State> {
-  state: State = {
-    pdfDocument: null,
-    error: null,
-  };
+  const handleError = useCallback(
+    (err: Error) => {
+      onError?.(err);
+      setPdfDocument(null);
+      setError(err);
+    },
+    [onError],
+  );
 
-  static defaultProps = {
-    workerSrc: "https://unpkg.com/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs",
-  };
-
-  documentRef = React.createRef<HTMLElement>();
-
-  componentDidMount() {
-    this.load();
-  }
-
-  componentWillUnmount() {
-    const { pdfDocument: discardedDocument } = this.state;
-    if (discardedDocument) {
-      discardedDocument.destroy();
-    }
-  }
-
-  componentDidUpdate({ url }: Props) {
-    if (this.props.url !== url) {
-      this.load();
-    }
-  }
-
-  componentDidCatch(error: Error) {
-    const { onError } = this.props;
-
-    if (onError) {
-      onError(error);
+  useEffect(() => {
+    // Skip if url hasn't changed (not on first render)
+    if (prevUrlRef.current === url) {
+      return;
     }
 
-    this.setState({ pdfDocument: null, error });
-  }
+    // Update previous url ref
+    prevUrlRef.current = url;
 
-  load() {
-    const { ownerDocument = document } = this.documentRef.current || {};
-    const { url, cMapUrl, cMapPacked, workerSrc } = this.props;
-    const { pdfDocument: discardedDocument } = this.state;
-    this.setState({ pdfDocument: null, error: null });
+    const { ownerDocument = document } = documentRef.current || {};
+
+    setPdfDocument(null);
+    setError(null);
 
     if (typeof workerSrc === "string") {
       GlobalWorkerOptions.workerSrc = workerSrc;
     }
 
+    let cancelled = false;
+
     Promise.resolve()
-      .then(() => discardedDocument?.destroy())
       .then(() => {
-        if (!url) {
+        if (cancelled) return;
+        const discarded = discardedDocumentRef.current;
+        discardedDocumentRef.current = null;
+        return discarded?.destroy();
+      })
+      .then(() => {
+        if (cancelled || !url) {
           return;
         }
 
-        const document = {
-          ...this.props,
+        const documentParams = {
+          url,
           ownerDocument,
           cMapUrl,
           cMapPacked,
         };
 
-        return getDocument(document).promise.then((pdfDocument) => {
-          this.setState({ pdfDocument });
+        return getDocument(documentParams).promise.then((doc) => {
+          if (cancelled) return;
+          discardedDocumentRef.current = doc;
+          setPdfDocument(doc);
         });
       })
-      .catch((e) => this.componentDidCatch(e));
-  }
+      .catch((e) => {
+        if (!cancelled) handleError(e);
+      });
 
-  render() {
-    const { children, beforeLoad } = this.props;
-    const { pdfDocument, error } = this.state;
-    return (
-      <>
-        <span ref={this.documentRef} />
-        {error
-          ? this.renderError()
-          : !pdfDocument || !children
-            ? beforeLoad
-            : children(pdfDocument)}
-      </>
-    );
-  }
+    // Cleanup: destroy PDF document on unmount or url change
+    return () => {
+      cancelled = true;
+      const discarded = discardedDocumentRef.current;
+      if (discarded) {
+        discarded.destroy();
+        discardedDocumentRef.current = null;
+      }
+    };
+  }, [url, workerSrc, cMapUrl, cMapPacked, handleError]);
 
-  renderError() {
-    const { errorMessage } = this.props;
-    if (errorMessage) {
-      return React.cloneElement(errorMessage, { error: this.state.error });
+  // Memoize error rendering
+  const renderError = useMemo(() => {
+    if (errorMessage && error) {
+      return React.cloneElement(
+        errorMessage as React.ReactElement<{ error?: Error }>,
+        {
+          error,
+        },
+      );
     }
-
     return null;
-  }
-}
+  }, [errorMessage, error]);
+
+  return (
+    <>
+      <span ref={documentRef} />
+      {error
+        ? renderError
+        : !pdfDocument || !children
+          ? beforeLoad
+          : children(pdfDocument)}
+    </>
+  );
+};

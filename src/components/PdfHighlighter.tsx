@@ -66,7 +66,7 @@ interface Props<T_HT> {
   ) => JSX.Element;
   highlights: Array<T_HT>;
   onScrollChange: () => void;
-  scrollRef: (scrollTo: (highlight: T_HT) => void) => void;
+  scrollRef?: (scrollTo: (highlight: T_HT) => void) => void;
   pdfDocument: PDFDocumentProxy;
   pdfScaleValue: string;
   onSelectionFinished: (
@@ -416,7 +416,7 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
 
     this.handleScaleValue();
 
-    scrollRef(this.scrollTo);
+    scrollRef?.(this.scrollTo);
   };
 
   onSelectionChange = () => {

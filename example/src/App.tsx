@@ -17,12 +17,11 @@ import type {
 
 import { Sidebar } from "./Sidebar";
 import { Spinner } from "./Spinner";
-import { testHighlights as _testHighlights } from "./test-highlights";
 
 import "./style/App.css";
 import "../../dist/style.css";
 
-const testHighlights: Record<string, Array<IHighlight>> = _testHighlights;
+const testHighlights: Record<string, Array<IHighlight>> = {};
 
 const getNextId = () => String(Math.random()).slice(2);
 
@@ -44,7 +43,8 @@ const HighlightPopup = ({
     </div>
   ) : null;
 
-const PRIMARY_PDF_URL = "https://arxiv.org/pdf/1708.08021";
+const PRIMARY_PDF_URL = import.meta.env.BASE_URL + "test.pdf";
+
 const SECONDARY_PDF_URL = "https://arxiv.org/pdf/1604.02480";
 
 export function App() {
@@ -68,28 +68,6 @@ export function App() {
   };
 
   const scrollViewerTo = useRef((highlight: IHighlight) => {});
-
-  const scrollToHighlightFromHash = useCallback(() => {
-    const highlight = getHighlightById(parseIdFromHash());
-    if (highlight) {
-      scrollViewerTo.current(highlight);
-    }
-  }, []);
-
-  useEffect(() => {
-    window.addEventListener("hashchange", scrollToHighlightFromHash, false);
-    return () => {
-      window.removeEventListener(
-        "hashchange",
-        scrollToHighlightFromHash,
-        false,
-      );
-    };
-  }, [scrollToHighlightFromHash]);
-
-  const getHighlightById = (id: string) => {
-    return highlights.find((highlight) => highlight.id === id);
-  };
 
   const addHighlight = (highlight: NewHighlight) => {
     console.log("Saving highlight", highlight);
@@ -126,16 +104,12 @@ export function App() {
   };
 
   return (
-    <div className="App" style={{ display: "flex", height: "100vh" }}>
-      <Sidebar
-        highlights={highlights}
-        resetHighlights={resetHighlights}
-        toggleDocument={toggleDocument}
-      />
+    <div className="App" style={{ display: "flex", height: "100vh", width: "100vw" }}>
       <div
         style={{
           height: "100vh",
-          width: "75vw",
+          flex: 1,
+          minWidth: 0,
           position: "relative",
         }}
       >
@@ -147,16 +121,9 @@ export function App() {
               onScrollChange={resetHash}
               scrollRef={(scrollTo) => {
                 scrollViewerTo.current = scrollTo;
-                scrollToHighlightFromHash();
               }}
-              onSelectionFinished={(
-                position,
-                content,
-                hideTipAndSelection,
-                transformSelection,
-              ) => (
+              onSelectionFinished={(position, content, hideTipAndSelection) => (
                 <Tip
-                  onOpen={transformSelection}
                   onConfirm={(comment) => {
                     addHighlight({ content, position, comment });
                     hideTipAndSelection();
@@ -212,6 +179,11 @@ export function App() {
           )}
         </PdfLoader>
       </div>
+      {/* <Sidebar
+        highlights={highlights}
+        resetHighlights={resetHighlights}
+        toggleDocument={toggleDocument}
+      /> */}
     </div>
   );
 }

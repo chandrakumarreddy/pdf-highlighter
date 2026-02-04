@@ -34,8 +34,11 @@ export function Highlight({
         <div
           className={`Highlight__emoji ${styles.emoji}`}
           style={{
-            left: 20,
+            left: 0,
             top: boundingRect.top,
+            fontSize: 14,
+            fontWeight: 700,
+            color: "red",
           }}
         >
           {comment.emoji}

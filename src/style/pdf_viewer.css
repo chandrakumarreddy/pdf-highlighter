@@ -1,5 +1,26 @@
 /* overrides for pdf_viewer.css from PDF.JS web viewer */
 
+/* Main PDF viewer container styles */
+.pdfViewer {
+  background-color: #525659;
+}
+
+/* Individual page styles */
+.page {
+  background-color: white;
+  margin: 16px auto 16px auto;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15), 0 4px 16px rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  position: relative;
+}
+
+/* Page canvas rendering */
+.page canvas {
+  display: block;
+  border-radius: 4px;
+}
+
+/* Text layer for text selection */
 .textLayer {
   z-index: 2;
   opacity: 1;
@@ -10,7 +31,6 @@
 .annotationLayer {
   position: absolute;
   top: 0;
-
   z-index: 3;
 }
 
