@@ -89,7 +89,7 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
   State<T_HT>
 > {
   static defaultProps = {
-    pdfScaleValue: "auto",
+    pdfScaleValue: "page-width",
   };
 
   state: State<T_HT> = {
@@ -114,9 +114,16 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
   unsubscribe = () => {};
   private scrollTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private isHandlingParagraphClick = false;
-  private paragraphClickHandlerRef: { current: ((e: MouseEvent) => void) | null } = {
+  private paragraphClickHandlerRef: { current: ((e: Event) => void) | null } = {
     current: null,
   };
+  // Cache span positions per textLayer for performance
+  private spanCache = new Map<Element, Array<{ el: HTMLElement; rect: DOMRect }>>();
+  // Track visible page numbers for viewport-based rendering
+  private visiblePageNumbers = new Set<number>();
+  private viewportObserver: IntersectionObserver | null = null;
+  // Cache for grouped highlights to avoid re-computation
+  private highlightGroupCache = new Map<string, ReturnType<typeof this.groupHighlightsByPage>>();
 
   constructor(props: Props<T_HT>) {
     super(props);
@@ -144,6 +151,12 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
       doc.defaultView?.addEventListener("resize", this.debouncedScaleValue);
       if (observer) observer.observe(this.containerNode);
 
+      // Set up paragraph click handler once (not on every textlayerrendered)
+      this.setupParagraphClickHandler();
+
+      // Set up viewport observer for performance
+      this.setupViewportObserver();
+
       this.unsubscribe = () => {
         eventBus.off("pagesinit", this.onDocumentReady);
         eventBus.off("textlayerrendered", this.onTextLayerRendered);
@@ -154,6 +167,20 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
           this.debouncedScaleValue,
         );
         if (observer) observer.disconnect();
+
+        // Cleanup viewport observer
+        if (this.viewportObserver) {
+          this.viewportObserver.disconnect();
+          this.viewportObserver = null;
+        }
+
+        // Cleanup paragraph click handler
+        if (this.paragraphClickHandlerRef.current && this.containerNode) {
+          this.containerNode.removeEventListener("click", this.paragraphClickHandlerRef.current);
+        }
+
+        // Clear span cache
+        this.spanCache.clear();
       };
     }
   };
@@ -238,6 +265,14 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
   } {
     const { ghostHighlight } = this.state;
 
+    // Create a hash for the current highlights to check cache
+    const highlightsHash = this.createHighlightsHash(highlights, ghostHighlight);
+
+    // Check cache
+    if (this.highlightGroupCache.has(highlightsHash)) {
+      return this.highlightGroupCache.get(highlightsHash)!;
+    }
+
     const allHighlights = [...highlights, ghostHighlight].filter(
       Boolean,
     ) as T_HT[];
@@ -281,7 +316,25 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
       }
     }
 
+    // Cache the result
+    this.highlightGroupCache.set(highlightsHash, groupedHighlights);
+
+    // Clean up old cache entries (keep only last 5)
+    if (this.highlightGroupCache.size > 5) {
+      const firstKey = this.highlightGroupCache.keys().next().value;
+      if (firstKey) {
+        this.highlightGroupCache.delete(firstKey);
+      }
+    }
+
     return groupedHighlights;
+  }
+
+  // Create a hash for cache invalidation
+  private createHighlightsHash(highlights: Array<T_HT>, ghostHighlight: State<T_HT>['ghostHighlight']): string {
+    const ids = highlights.map(h => h.id ?? 'unknown').join('-');
+    const ghostId = ghostHighlight ? 'ghost' : 'none';
+    return `${ids}-${ghostId}`;
   }
 
   showTip(highlight: T_ViewportHighlight<T_HT>, content: JSX.Element) {
@@ -338,11 +391,10 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
     this.setState({
       tipPosition: null,
       tipChildren: null,
+      ghostHighlight: null,
+      tip: null,
     });
-
-    this.setState({ ghostHighlight: null, tip: null }, () =>
-      this.renderHighlightLayers(),
-    );
+    // Don't immediately render - let componentDidUpdate handle it when highlights prop updates
   };
 
   setTip(position: Position, inner: JSX.Element | null) {
@@ -395,30 +447,105 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
 
   onTextLayerRendered = () => {
     this.renderHighlightLayers();
-    this.attachParagraphClickHandlers();
   };
 
-  attachParagraphClickHandlers = () => {
-    const container = this.containerNode;
-    if (!container) return;
-
-    // Create the handler if it doesn't exist
+  // Set up paragraph click handler once (called from attachRef)
+  setupParagraphClickHandler = () => {
     if (!this.paragraphClickHandlerRef.current) {
       this.paragraphClickHandlerRef.current = (evt: Event) => {
         this.handleParagraphClick(evt as MouseEvent);
       };
     }
 
-    // Find all text layers and attach click handler using event delegation
-    const textLayers = container.querySelectorAll(".textLayer");
-    textLayers.forEach((textLayer) => {
-      // Check if handler is already attached
-      if (!(textLayer as any).__hasParagraphClickHandler) {
-        textLayer.addEventListener("click", this.paragraphClickHandlerRef.current!);
-        (textLayer as any).__hasParagraphClickHandler = true;
+    // Attach to container for event delegation
+    if (this.containerNode && this.paragraphClickHandlerRef.current) {
+      this.containerNode.addEventListener("click", this.paragraphClickHandlerRef.current);
+    }
+  };
+
+  // Set up viewport observer for performance (called from attachRef)
+  setupViewportObserver = () => {
+    if (typeof IntersectionObserver === "undefined") return;
+
+    const options = {
+      root: this.viewer.container,
+      rootMargin: "200px", // 200px buffer for smooth scrolling
+    };
+
+    this.viewportObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        const pageElement = entry.target as HTMLElement;
+        const pageNumber = parseInt(pageElement.dataset.pageNumber || "0");
+
+        if (pageNumber > 0) {
+          if (entry.isIntersecting) {
+            // Page entered viewport - add to visible set
+            this.visiblePageNumbers.add(pageNumber);
+            // Render highlights for this page
+            this.renderHighlightLayerForPage(pageNumber);
+          } else {
+            // Page left viewport - remove from visible set and cleanup
+            this.visiblePageNumbers.delete(pageNumber);
+            this.cleanupHighlightLayerForPage(pageNumber);
+          }
+        }
+      });
+    }, options);
+
+    // Observe all page elements
+    const pages = this.viewer.container.querySelectorAll(".page");
+    pages.forEach((page) => {
+      // Ensure page has data-page-number attribute
+      if (!(page as HTMLElement).dataset.pageNumber) {
+        const pageNumber = Array.from(this.viewer.container.querySelectorAll(".page")).indexOf(page) + 1;
+        (page as HTMLElement).dataset.pageNumber = pageNumber.toString();
       }
+      this.viewportObserver?.observe(page);
     });
   };
+
+  // Cleanup highlight layer for a specific page when it leaves viewport
+  cleanupHighlightLayerForPage(pageNumber: number) {
+    const rootData = this.highlightRoots[pageNumber];
+    if (rootData && !rootData.container.isConnected) {
+      // Already disconnected, clean up
+      try {
+        rootData.reactRoot.unmount();
+      } catch {
+        // Ignore errors
+      }
+      delete this.highlightRoots[pageNumber];
+    }
+  }
+
+  // Render highlights for a specific page (used by viewport observer)
+  renderHighlightLayerForPage(pageNumber: number) {
+    // Check if already rendered
+    const existingRoot = this.highlightRoots[pageNumber];
+    if (existingRoot?.container.isConnected) {
+      return; // Already rendered and connected
+    }
+
+    // Unmount old root if exists
+    if (existingRoot) {
+      try {
+        existingRoot.reactRoot.unmount();
+      } catch {
+        // Ignore errors
+      }
+    }
+
+    // Find or create highlight layer for this page
+    const highlightLayer = this.findOrCreateHighlightLayer(pageNumber);
+    if (highlightLayer) {
+      const reactRoot = createRoot(highlightLayer);
+      this.highlightRoots[pageNumber] = {
+        reactRoot,
+        container: highlightLayer,
+      };
+      this.renderHighlightLayer(reactRoot, pageNumber);
+    }
+  }
 
   handleParagraphClick = (event: MouseEvent) => {
     const target = event.target as HTMLElement;
@@ -427,42 +554,50 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
     // Set flag to prevent duplicate handling in onSelectionChange
     this.isHandlingParagraphClick = true;
 
-    // Find the clicked span and its position
+    // Find the clicked span
     const clickedSpan = target.closest<HTMLElement>("span[role='presentation']");
     if (!clickedSpan) {
       this.isHandlingParagraphClick = false;
       return;
     }
 
-    // Get all spans in the same text layer
+    // Get text layer
     const textLayer = target.closest<HTMLElement>(".textLayer");
     if (!textLayer) {
       this.isHandlingParagraphClick = false;
       return;
     }
 
-    const allSpans = Array.from(textLayer.querySelectorAll<HTMLElement>("span[role='presentation']"));
-    const clickedIndex = allSpans.indexOf(clickedSpan);
+    // Use cached spans if available, otherwise build cache
+    let cachedSpans = this.spanCache.get(textLayer);
+    if (!cachedSpans) {
+      cachedSpans = Array.from(
+        textLayer.querySelectorAll<HTMLElement>("span[role='presentation']")
+      ).map((el) => ({ el, rect: el.getBoundingClientRect() }));
+      this.spanCache.set(textLayer, cachedSpans);
+    }
 
+    // Find clicked span in cache
+    const clickedIndex = cachedSpans.findIndex((s) => s.el === clickedSpan);
     if (clickedIndex === -1) {
       this.isHandlingParagraphClick = false;
       return;
     }
 
-    // Find the paragraph boundary by grouping spans with similar y-positions
-    // This handles table columns and multi-column layouts correctly
-    const clickedRect = clickedSpan.getBoundingClientRect();
+    // Select the full paragraph including wrapped text
+    const clickedRect = cachedSpans[clickedIndex].rect;
     const yThreshold = 5; // pixels - spans within this y-distance are considered same line
-    const xGapThreshold = 20; // pixels - x gaps larger than this indicate different column
+    const yContinuationThreshold = 18; // pixels - wrapped text continuation (increased for better paragraph detection)
+    const xGapThreshold = 30; // pixels - x gaps larger than this indicate different column/section
 
     // Helper to check if two spans are likely in the same text flow (same column/paragraph)
-    const areSpansConnected = (span2: HTMLElement, baseRect: DOMRect): boolean => {
-      const rect2 = span2.getBoundingClientRect();
+    const areSpansConnected = (span2Index: number, baseRect: DOMRect): boolean => {
+      const rect2 = cachedSpans![span2Index].rect;
 
-      // Check y-position alignment (same or next line)
+      // Check y-position alignment (same or next line for wrapped text)
       const yAligned = Math.abs(rect2.top - baseRect.top) <= yThreshold ||
-                      Math.abs(rect2.bottom - baseRect.top) <= yThreshold * 2 ||
-                      Math.abs(rect2.top - baseRect.bottom) <= yThreshold * 2;
+                      Math.abs(rect2.bottom - baseRect.top) <= yContinuationThreshold ||
+                      Math.abs(rect2.top - baseRect.bottom) <= yContinuationThreshold;
 
       if (!yAligned) return false;
 
@@ -478,30 +613,28 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
     let startIndex = clickedIndex;
     let currentRect = clickedRect;
     while (startIndex > 0) {
-      const prevSpan = allSpans[startIndex - 1];
-      if (!areSpansConnected(prevSpan, currentRect)) {
+      if (!areSpansConnected(startIndex - 1, currentRect)) {
         break;
       }
       startIndex--;
-      currentRect = prevSpan.getBoundingClientRect();
+      currentRect = cachedSpans[startIndex].rect;
     }
 
     // Find the last span of the paragraph by going forward
     let endIndex = clickedIndex;
     currentRect = clickedRect;
-    while (endIndex < allSpans.length - 1) {
-      const nextSpan = allSpans[endIndex + 1];
-      if (!areSpansConnected(nextSpan, currentRect)) {
+    while (endIndex < cachedSpans.length - 1) {
+      if (!areSpansConnected(endIndex + 1, currentRect)) {
         break;
       }
       endIndex++;
-      currentRect = nextSpan.getBoundingClientRect();
+      currentRect = cachedSpans[endIndex].rect;
     }
 
     // Create range from first to last span of the paragraph
     const range = document.createRange();
-    range.setStartBefore(allSpans[startIndex]);
-    range.setEndAfter(allSpans[endIndex]);
+    range.setStartBefore(cachedSpans[startIndex].el);
+    range.setEndAfter(cachedSpans[endIndex].el);
 
     // Select the range
     const selection = window.getSelection();
@@ -796,7 +929,38 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
 
   private renderHighlightLayers() {
     const { pdfDocument } = this.props;
-    for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber++) {
+
+    // If viewport observer is active and we have visible pages, only render those
+    // Otherwise fall back to rendering all pages (initial render or no IntersectionObserver support)
+    const pagesToRender =
+      this.viewportObserver && this.visiblePageNumbers.size > 0
+        ? this.visiblePageNumbers
+        : new Set(Array.from({ length: pdfDocument.numPages }, (_, i) => i + 1));
+
+    // Also ensure first page is always rendered initially
+    if (pagesToRender.size === 0) {
+      pagesToRender.add(1);
+    }
+
+    // Clean up highlight roots for pages that are no longer visible
+    for (const pageNumber in this.highlightRoots) {
+      const pageNum = parseInt(pageNumber);
+      if (!pagesToRender.has(pageNum)) {
+        // Page is no longer visible, clean it up
+        const rootData = this.highlightRoots[pageNumber];
+        if (rootData && !rootData.container.isConnected) {
+          try {
+            rootData.reactRoot.unmount();
+          } catch {
+            // Ignore errors during unmount
+          }
+          delete this.highlightRoots[pageNumber];
+        }
+      }
+    }
+
+    // Render highlights for visible pages
+    for (const pageNumber of pagesToRender) {
       const highlightRoot = this.highlightRoots[pageNumber];
       /** Need to check if container is still attached to the DOM as PDF.js can unload pages. */
       if (highlightRoot?.container.isConnected) {

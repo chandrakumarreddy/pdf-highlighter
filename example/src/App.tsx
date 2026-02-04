@@ -25,8 +25,8 @@ const testHighlights: Record<string, Array<IHighlight>> = {};
 
 const getNextId = () => String(Math.random()).slice(2);
 
-// Similarity search threshold (0.8 = 80% similarity)
-const SIMILARITY_THRESHOLD = 0.8;
+// Similarity search threshold (0.60 = 60% structural similarity)
+const SIMILARITY_THRESHOLD = 0.60;
 
 const parseIdFromHash = () =>
   document.location.hash.slice("#highlight-".length);
@@ -99,17 +99,18 @@ export function App() {
   ) => {
     const { content, position, comment } = highlight;
 
+    // Hide the tip and clear the ghost highlight first
+    hideTipAndSelection();
+
     // Only search for similar sections if it's a text highlight (not image)
     if (!content.text || content.text.length < 15) {
       // Text too short, just add the single highlight
       addHighlight(highlight);
-      hideTipAndSelection();
       return;
     }
 
     // Add the original highlight first
     addHighlight(highlight);
-    hideTipAndSelection();
 
     // Search for similar sections
     if (pdfHighlighterRef.current) {
@@ -170,6 +171,28 @@ export function App() {
             }
           : h;
       }),
+    );
+  };
+
+  const updateHighlightComment = (
+    highlightId: string,
+    comment: { text: string; emoji: string },
+  ) => {
+    console.log("Updating highlight comment", highlightId, comment);
+    setHighlights((prevHighlights) =>
+      prevHighlights.map((h) => {
+        if (h.id === highlightId) {
+          return { ...h, comment };
+        }
+        return h;
+      }),
+    );
+  };
+
+  const deleteHighlight = (highlightId: string) => {
+    console.log("Deleting highlight", highlightId);
+    setHighlights((prevHighlights) =>
+      prevHighlights.filter((h) => h.id !== highlightId),
     );
   };
 
@@ -238,6 +261,21 @@ export function App() {
                       isScrolledTo={isScrolledTo}
                       position={highlight.position}
                       comment={highlight.comment}
+                      onClick={() => {
+                        setTip(highlight, () => (
+                          <Tip
+                            initialEmoji={highlight.comment?.emoji}
+                            onConfirm={(comment) => {
+                              updateHighlightComment(highlight.id, comment);
+                              hideTip();
+                            }}
+                            onDelete={() => {
+                              deleteHighlight(highlight.id);
+                              hideTip();
+                            }}
+                          />
+                        ));
+                      }}
                     />
                   ) : (
                     <AreaHighlight

@@ -6,10 +6,12 @@ const EMOJI_OPTIONS = ["Section", "Subsection", "Question"] as const;
 interface Props {
   onConfirm: (comment: { text: string; emoji: string }) => void;
   onUpdate?: () => void;
+  initialEmoji?: string; // For edit mode - pre-select the current emoji
+  onDelete?: () => void; // For delete option in edit mode
 }
 
-export function Tip({ onConfirm, onUpdate }: Props) {
-  const [emoji, setEmoji] = useState("");
+export function Tip({ onConfirm, onUpdate, initialEmoji, onDelete }: Props) {
+  const [emoji, setEmoji] = useState(initialEmoji || "");
 
   useEffect(() => {
     if (onUpdate) {
@@ -17,14 +19,13 @@ export function Tip({ onConfirm, onUpdate }: Props) {
     }
   }, [onUpdate]);
 
+  const handleEmojiChange = (value: string) => {
+    setEmoji(value);
+    onConfirm({ text: "", emoji: value });
+  };
+
   return (
-    <form
-      className={styles.card}
-      onSubmit={(event) => {
-        event.preventDefault();
-        onConfirm({ text: "", emoji });
-      }}
-    >
+    <div className={styles.card}>
       <div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
           {EMOJI_OPTIONS.map((_emoji) => (
@@ -34,16 +35,31 @@ export function Tip({ onConfirm, onUpdate }: Props) {
                 name="emoji"
                 value={_emoji}
                 checked={emoji === _emoji}
-                onChange={(e) => setEmoji(e.target.value)}
+                onChange={(e) => handleEmojiChange(e.target.value)}
               />
               {_emoji}
             </label>
           ))}
         </div>
+        {initialEmoji && onDelete && (
+          <button
+            type="button"
+            onClick={onDelete}
+            style={{
+              marginTop: "8px",
+              padding: "4px 8px",
+              background: "#ff4444",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor: "pointer",
+              fontSize: "12px",
+            }}
+          >
+            Remove
+          </button>
+        )}
       </div>
-      <div>
-        <input type="submit" value="Save" />
-      </div>
-    </form>
+    </div>
   );
 }
