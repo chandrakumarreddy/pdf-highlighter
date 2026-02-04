@@ -78,12 +78,31 @@ export interface Page {
 }
 
 /**
+ * Text block types for zero-shot classification
+ */
+export enum BlockType {
+  UNLABELED = "unlabeled",
+  SUGGESTION_QUESTION = "suggestion_question",
+  SUGGESTION_SUBSECTION = "suggestion_subsection",
+  SUGGESTION_SECTION = "suggestion_section",
+}
+
+/**
+ * Classification result for a text block
+ */
+export interface TextClassification {
+  type: BlockType;
+  confidence: number;
+}
+
+/**
  * Result of a similarity search for similar sections
  */
 export interface SimilarityResult {
   text: string;
   score: number;
   position: ScaledPosition;
+  classification?: TextClassification;
 }
 
 /**
