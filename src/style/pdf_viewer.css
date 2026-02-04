@@ -2,7 +2,17 @@
 
 /* Main PDF viewer container styles */
 .pdfViewer {
-  background-color: #525659;
+  background-color: #fff;
+}
+
+/* Text spans are clickable for paragraph highlighting */
+.textLayer span[role="presentation"] {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.textLayer span[role="presentation"]:hover {
+  background-color: rgba(102, 126, 234, 0.08);
 }
 
 /* Individual page styles */
@@ -34,12 +44,7 @@
   z-index: 3;
 }
 
-html
-  body
-  .textLayer
-  > div:not(.PdfHighlighter__highlight-layer):not(.Highlight):not(
-    .Highlight__emoji
-  ) {
+html body .textLayer>div:not(.PdfHighlighter__highlight-layer):not(.Highlight):not(.Highlight__emoji) {
   opacity: 1;
   mix-blend-mode: multiply;
 }
@@ -69,12 +74,7 @@ html
   z-index: 3;
 }
 
-html
-  body
-  .textLayer
-  > div:not(.PdfHighlighter__highlight-layer):not(.Highlight):not(
-    .Highlight__emoji
-  ) {
+html body .textLayer>div:not(.PdfHighlighter__highlight-layer):not(.Highlight):not(.Highlight__emoji) {
   opacity: 1;
   mix-blend-mode: multiply;
 }
@@ -85,7 +85,8 @@ html
 }
 
 /* biome-ignore lint/correctness/noUnknownMediaFeatureName: update this */
-@media all and (-ms-high-contrast: none), (-ms-high-contrast: active) {
+@media all and (-ms-high-contrast: none),
+(-ms-high-contrast: active) {
   .textLayer {
     opacity: 0.5;
   }
@@ -93,7 +94,8 @@ html
 
 /* Internet Explorer support method */
 /* biome-ignore lint/correctness/noUnknownMediaFeatureName: update this */
-@media all and (-ms-high-contrast: none), (-ms-high-contrast: active) {
+@media all and (-ms-high-contrast: none),
+(-ms-high-contrast: active) {
   .textLayer {
     opacity: 0.5;
   }

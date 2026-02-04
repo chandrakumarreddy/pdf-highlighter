@@ -19,6 +19,7 @@ import {
   getWindow,
   isHTMLElement,
 } from "../lib/pdfjs-dom";
+import { findSimilarSections } from "../lib/similar-section-finder";
 import styles from "../style/PdfHighlighter.module.css";
 import type {
   IHighlight,
@@ -27,6 +28,8 @@ import type {
   Position,
   Scaled,
   ScaledPosition,
+  SimilarityResult,
+  SimilaritySearchOptions,
 } from "../types";
 import { HighlightLayer } from "./HighlightLayer";
 import { MouseSelection } from "./MouseSelection";
@@ -110,6 +113,10 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
   } = {};
   unsubscribe = () => {};
   private scrollTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private isHandlingParagraphClick = false;
+  private paragraphClickHandlerRef: { current: ((e: MouseEvent) => void) | null } = {
+    current: null,
+  };
 
   constructor(props: Props<T_HT>) {
     super(props);
@@ -388,6 +395,134 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
 
   onTextLayerRendered = () => {
     this.renderHighlightLayers();
+    this.attachParagraphClickHandlers();
+  };
+
+  attachParagraphClickHandlers = () => {
+    const container = this.containerNode;
+    if (!container) return;
+
+    // Create the handler if it doesn't exist
+    if (!this.paragraphClickHandlerRef.current) {
+      this.paragraphClickHandlerRef.current = (evt: Event) => {
+        this.handleParagraphClick(evt as MouseEvent);
+      };
+    }
+
+    // Find all text layers and attach click handler using event delegation
+    const textLayers = container.querySelectorAll(".textLayer");
+    textLayers.forEach((textLayer) => {
+      // Check if handler is already attached
+      if (!(textLayer as any).__hasParagraphClickHandler) {
+        textLayer.addEventListener("click", this.paragraphClickHandlerRef.current!);
+        (textLayer as any).__hasParagraphClickHandler = true;
+      }
+    });
+  };
+
+  handleParagraphClick = (event: MouseEvent) => {
+    const target = event.target as HTMLElement;
+    if (!target || !target.closest(".textLayer")) return;
+
+    // Set flag to prevent duplicate handling in onSelectionChange
+    this.isHandlingParagraphClick = true;
+
+    // Find the clicked span and its position
+    const clickedSpan = target.closest<HTMLElement>("span[role='presentation']");
+    if (!clickedSpan) {
+      this.isHandlingParagraphClick = false;
+      return;
+    }
+
+    // Get all spans in the same text layer
+    const textLayer = target.closest<HTMLElement>(".textLayer");
+    if (!textLayer) {
+      this.isHandlingParagraphClick = false;
+      return;
+    }
+
+    const allSpans = Array.from(textLayer.querySelectorAll<HTMLElement>("span[role='presentation']"));
+    const clickedIndex = allSpans.indexOf(clickedSpan);
+
+    if (clickedIndex === -1) {
+      this.isHandlingParagraphClick = false;
+      return;
+    }
+
+    // Find the paragraph boundary by grouping spans with similar y-positions
+    // This handles table columns and multi-column layouts correctly
+    const clickedRect = clickedSpan.getBoundingClientRect();
+    const yThreshold = 5; // pixels - spans within this y-distance are considered same line
+    const xGapThreshold = 20; // pixels - x gaps larger than this indicate different column
+
+    // Helper to check if two spans are likely in the same text flow (same column/paragraph)
+    const areSpansConnected = (span2: HTMLElement, baseRect: DOMRect): boolean => {
+      const rect2 = span2.getBoundingClientRect();
+
+      // Check y-position alignment (same or next line)
+      const yAligned = Math.abs(rect2.top - baseRect.top) <= yThreshold ||
+                      Math.abs(rect2.bottom - baseRect.top) <= yThreshold * 2 ||
+                      Math.abs(rect2.top - baseRect.bottom) <= yThreshold * 2;
+
+      if (!yAligned) return false;
+
+      // Check x-position (no large gaps that would indicate different column)
+      // Spans should overlap horizontally or be close
+      const horizontalOverlap = !(rect2.right < baseRect.left - xGapThreshold ||
+                                 rect2.left > baseRect.right + xGapThreshold);
+
+      return horizontalOverlap;
+    };
+
+    // Find the first span of the paragraph by going backward
+    let startIndex = clickedIndex;
+    let currentRect = clickedRect;
+    while (startIndex > 0) {
+      const prevSpan = allSpans[startIndex - 1];
+      if (!areSpansConnected(prevSpan, currentRect)) {
+        break;
+      }
+      startIndex--;
+      currentRect = prevSpan.getBoundingClientRect();
+    }
+
+    // Find the last span of the paragraph by going forward
+    let endIndex = clickedIndex;
+    currentRect = clickedRect;
+    while (endIndex < allSpans.length - 1) {
+      const nextSpan = allSpans[endIndex + 1];
+      if (!areSpansConnected(nextSpan, currentRect)) {
+        break;
+      }
+      endIndex++;
+      currentRect = nextSpan.getBoundingClientRect();
+    }
+
+    // Create range from first to last span of the paragraph
+    const range = document.createRange();
+    range.setStartBefore(allSpans[startIndex]);
+    range.setEndAfter(allSpans[endIndex]);
+
+    // Select the range
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    // Store the range and trigger tip
+    this.setState(
+      {
+        isCollapsed: false,
+        range,
+      },
+      () => {
+        this.afterSelection();
+        // Clear flag after processing
+        this.isHandlingParagraphClick = false;
+      }
+    );
+
+    event.preventDefault();
+    event.stopPropagation();
   };
 
   scrollTo = (highlight: T_HT) => {
@@ -436,6 +571,11 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
   };
 
   onSelectionChange = () => {
+    // Skip if we're handling a paragraph click (to avoid duplicate handling)
+    if (this.isHandlingParagraphClick) {
+      return;
+    }
+
     const container = this.containerNode;
     if (!container) {
       return;
@@ -703,5 +843,31 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
         }}
       />,
     );
+  }
+
+  /**
+   * Public API: Find similar sections across the PDF document
+   * This method can be called by parent components to trigger similarity search
+   */
+  async findSimilarSections(options: Omit<SimilaritySearchOptions, "pdfDocument" | "viewer">): Promise<SimilarityResult[]> {
+    return findSimilarSections({
+      ...options,
+      pdfDocument: this.props.pdfDocument,
+      viewer: this.viewer,
+    });
+  }
+
+  /**
+   * Get the PDF viewer instance for external use
+   */
+  getViewer(): PDFViewer {
+    return this.viewer;
+  }
+
+  /**
+   * Get the PDF document instance for external use
+   */
+  getPdfDocument(): PDFDocumentProxy {
+    return this.props.pdfDocument;
   }
 }

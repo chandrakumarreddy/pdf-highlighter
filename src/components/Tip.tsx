@@ -26,15 +26,9 @@ export function Tip({ onConfirm, onUpdate }: Props) {
       }}
     >
       <div>
-        <div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
           {EMOJI_OPTIONS.map((_emoji) => (
-            <label
-              key={_emoji}
-              style={{
-                color: "#000",
-                fontSize: 12,
-              }}
-            >
+            <label key={_emoji}>
               <input
                 type="radio"
                 name="emoji"

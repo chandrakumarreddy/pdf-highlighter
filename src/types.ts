@@ -76,3 +76,42 @@ export interface Page {
   node: HTMLElement;
   number: number;
 }
+
+/**
+ * Text item from PDF.js with coordinate information
+ */
+export interface TextItem {
+  str: string;
+  transform: number[]; // [a, b, c, d, e, f] transformation matrix
+  width: number;
+  height: number;
+  dir: string;
+  fontName: string;
+  hasEOL: boolean;
+  // Calculated viewport coordinates
+  x: number;
+  y: number;
+}
+
+/**
+ * Result of a similarity search for similar sections
+ */
+export interface SimilarityResult {
+  text: string;
+  score: number;
+  position: ScaledPosition;
+}
+
+/**
+ * Options for similarity search
+ */
+export interface SimilaritySearchOptions {
+  selectedText: string;
+  selectedPosition: ScaledPosition;
+  pdfDocument: any;
+  viewer: any;
+  threshold?: number; // default 0.8
+  maxResults?: number; // default 20
+  maxPages?: number; // default 50
+  onProgress?: (current: number, total: number, found: number) => void;
+}

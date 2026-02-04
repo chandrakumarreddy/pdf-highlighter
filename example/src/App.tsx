@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useRef } from "react";
 
 import {
   AreaHighlight,
@@ -24,6 +24,9 @@ import "../../dist/style.css";
 const testHighlights: Record<string, Array<IHighlight>> = {};
 
 const getNextId = () => String(Math.random()).slice(2);
+
+// Similarity search threshold (0.8 = 80% similarity)
+const SIMILARITY_THRESHOLD = 0.8;
 
 const parseIdFromHash = () =>
   document.location.hash.slice("#highlight-".length);
@@ -55,6 +58,10 @@ export function App() {
   const [highlights, setHighlights] = useState<Array<IHighlight>>(
     testHighlights[initialUrl] ? [...testHighlights[initialUrl]] : [],
   );
+  const [isSearchingSimilar, setIsSearchingSimilar] = useState(false);
+
+  // Ref to access PdfHighlighter methods
+  const pdfHighlighterRef = useRef<any>(null);
 
   const resetHighlights = () => {
     setHighlights([]);
@@ -75,6 +82,69 @@ export function App() {
       { ...highlight, id: getNextId() },
       ...prevHighlights,
     ]);
+  };
+
+  // Add multiple highlights at once (for similar sections)
+  const addHighlights = (newHighlights: NewHighlight[]) => {
+    setHighlights((prevHighlights) => [
+      ...newHighlights.map((h) => ({ ...h, id: getNextId() })),
+      ...prevHighlights,
+    ]);
+  };
+
+  // Find and add similar sections when a highlight is created
+  const handleHighlightWithSimilarity = async (
+    highlight: NewHighlight,
+    hideTipAndSelection: () => void,
+  ) => {
+    const { content, position, comment } = highlight;
+
+    // Only search for similar sections if it's a text highlight (not image)
+    if (!content.text || content.text.length < 15) {
+      // Text too short, just add the single highlight
+      addHighlight(highlight);
+      hideTipAndSelection();
+      return;
+    }
+
+    // Add the original highlight first
+    addHighlight(highlight);
+    hideTipAndSelection();
+
+    // Search for similar sections
+    if (pdfHighlighterRef.current) {
+      setIsSearchingSimilar(true);
+      try {
+        const similarSections = await pdfHighlighterRef.current.findSimilarSections({
+          selectedText: content.text,
+          selectedPosition: position,
+          threshold: SIMILARITY_THRESHOLD,
+          maxResults: 20,
+          onProgress: (current: number, total: number, found: number) => {
+            console.log(`Searching similar sections: page ${current}/${total}, found ${found}`);
+          },
+        });
+
+        // Create highlights for all similar sections
+        const similarHighlights: NewHighlight[] = similarSections.map((result: any) => ({
+          content: { text: result.text },
+          position: result.position,
+          comment: {
+            ...comment,
+            text: `Similar (${Math.round(result.score * 100)}%)`,
+          },
+        }));
+
+        if (similarHighlights.length > 0) {
+          addHighlights(similarHighlights);
+          console.log(`Added ${similarHighlights.length} similar highlights`);
+        }
+      } catch (error) {
+        console.error("Error finding similar sections:", error);
+      } finally {
+        setIsSearchingSimilar(false);
+      }
+    }
   };
 
   const updateHighlight = (
@@ -110,78 +180,120 @@ export function App() {
     >
       <div
         style={{
-          height: "100vh",
           flex: 1,
-          minWidth: 0,
-          position: "relative",
+          border: "2px solid #fff",
+          margin: "32px auto",
           overflow: "hidden",
+          borderRadius: 16,
+          padding: 8,
+          maxWidth: 1000,
         }}
       >
-        <PdfLoader url={url} beforeLoad={<Spinner />}>
-          {(pdfDocument) => (
-            <PdfHighlighter
-              pdfDocument={pdfDocument}
-              enableAreaSelection={(event) => event.altKey}
-              onScrollChange={resetHash}
-              scrollRef={(scrollTo) => {
-                scrollViewerTo.current = scrollTo;
-              }}
-              onSelectionFinished={(position, content, hideTipAndSelection) => (
-                <Tip
-                  onConfirm={(comment) => {
-                    addHighlight({ content, position, comment });
-                    hideTipAndSelection();
-                  }}
-                />
-              )}
-              highlightTransform={(
-                highlight,
-                index,
-                setTip,
-                hideTip,
-                viewportToScaled,
-                screenshot,
-                isScrolledTo,
-              ) => {
-                const isTextHighlight = !highlight.content?.image;
-
-                const component = isTextHighlight ? (
-                  <Highlight
-                    isScrolledTo={isScrolledTo}
-                    position={highlight.position}
-                    comment={highlight.comment}
-                  />
-                ) : (
-                  <AreaHighlight
-                    isScrolledTo={isScrolledTo}
-                    highlight={highlight}
-                    onChange={(boundingRect) => {
-                      updateHighlight(
-                        highlight.id,
-                        { boundingRect: viewportToScaled(boundingRect) },
-                        { image: screenshot(boundingRect) },
+        <div
+          style={{
+            height: "100vh",
+            flex: 1,
+            minWidth: 0,
+            position: "relative",
+            overflow: "hidden",
+          }}
+        >
+          <PdfLoader url={url} beforeLoad={<Spinner />}>
+            {(pdfDocument) => (
+              <PdfHighlighter
+                ref={pdfHighlighterRef as any}
+                pdfDocument={pdfDocument}
+                enableAreaSelection={(event) => event.altKey}
+                onScrollChange={resetHash}
+                scrollRef={(scrollTo) => {
+                  scrollViewerTo.current = scrollTo;
+                }}
+                onSelectionFinished={(
+                  position,
+                  content,
+                  hideTipAndSelection,
+                ) => (
+                  <Tip
+                    onConfirm={(comment) => {
+                      handleHighlightWithSimilarity(
+                        { content, position, comment },
+                        hideTipAndSelection,
                       );
                     }}
                   />
-                );
+                )}
+                highlightTransform={(
+                  highlight,
+                  index,
+                  setTip,
+                  hideTip,
+                  viewportToScaled,
+                  screenshot,
+                  isScrolledTo,
+                ) => {
+                  const isTextHighlight = !highlight.content?.image;
 
-                return (
-                  <Popup
-                    popupContent={<HighlightPopup {...highlight} />}
-                    onMouseOver={(popupContent) =>
-                      setTip(highlight, (highlight) => popupContent)
-                    }
-                    onMouseOut={hideTip}
-                    key={index}
-                  >
-                    {component}
-                  </Popup>
-                );
+                  const component = isTextHighlight ? (
+                    <Highlight
+                      isScrolledTo={isScrolledTo}
+                      position={highlight.position}
+                      comment={highlight.comment}
+                    />
+                  ) : (
+                    <AreaHighlight
+                      isScrolledTo={isScrolledTo}
+                      highlight={highlight}
+                      onChange={(boundingRect) => {
+                        updateHighlight(
+                          highlight.id,
+                          { boundingRect: viewportToScaled(boundingRect) },
+                          { image: screenshot(boundingRect) },
+                        );
+                      }}
+                    />
+                  );
+
+                  return (
+                    <Popup
+                      popupContent={<HighlightPopup {...highlight} />}
+                      onMouseOver={(popupContent) =>
+                        setTip(highlight, (highlight) => popupContent)
+                      }
+                      onMouseOut={hideTip}
+                      key={index}
+                    >
+                      {component}
+                    </Popup>
+                  );
+                }}
+                highlights={highlights}
+              />
+            )}
+          </PdfLoader>
+          {isSearchingSimilar && (
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: "rgba(255, 255, 255, 0.8)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1000,
               }}
-              highlights={highlights}
-            />
+            >
+              <div style={{ textAlign: "center" }}>
+                <Spinner />
+                <p style={{ marginTop: 16, fontSize: 14, color: "#666" }}>
+                  Finding similar sections...
+                </p>
+              </div>
+            </div>
           )}
-        </PdfLoader>
+        </div>
       </div>
       {/* <Sidebar
         highlights={highlights}
