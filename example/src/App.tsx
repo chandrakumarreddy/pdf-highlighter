@@ -104,13 +104,17 @@ export function App() {
   };
 
   return (
-    <div className="App" style={{ display: "flex", height: "100vh", width: "100vw" }}>
+    <div
+      className="App"
+      style={{ display: "flex", height: "100vh", width: "100vw" }}
+    >
       <div
         style={{
           height: "100vh",
           flex: 1,
           minWidth: 0,
           position: "relative",
+          overflow: "hidden",
         }}
       >
         <PdfLoader url={url} beforeLoad={<Spinner />}>

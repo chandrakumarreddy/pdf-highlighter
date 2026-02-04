@@ -109,6 +109,7 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
     [page: number]: { reactRoot: Root; container: Element };
   } = {};
   unsubscribe = () => {};
+  private scrollTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   constructor(props: Props<T_HT>) {
     super(props);
@@ -195,6 +196,20 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
 
   componentWillUnmount() {
     this.unsubscribe();
+    // Clear any pending scroll timeout
+    if (this.scrollTimeoutId !== null) {
+      clearTimeout(this.scrollTimeoutId);
+    }
+    // Unmount all React roots to prevent memory leaks
+    for (const pageNumber in this.highlightRoots) {
+      const rootData = this.highlightRoots[pageNumber];
+      try {
+        rootData.reactRoot.unmount();
+      } catch {
+        // Ignore errors during unmount
+      }
+    }
+    this.highlightRoots = {};
   }
 
   findOrCreateHighlightLayer(page: number) {
@@ -406,8 +421,9 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
     );
 
     // wait for scrolling to finish
-    setTimeout(() => {
+    this.scrollTimeoutId = setTimeout(() => {
       this.viewer.container.addEventListener("scroll", this.onScroll);
+      this.scrollTimeoutId = null;
     }, 100);
   };
 
@@ -646,6 +662,14 @@ export class PdfHighlighter<T_HT extends IHighlight> extends PureComponent<
       if (highlightRoot?.container.isConnected) {
         this.renderHighlightLayer(highlightRoot.reactRoot, pageNumber);
       } else {
+        // Unmount old root if exists to prevent memory leak
+        if (highlightRoot) {
+          try {
+            highlightRoot.reactRoot.unmount();
+          } catch {
+            // Ignore errors during unmount
+          }
+        }
         const highlightLayer = this.findOrCreateHighlightLayer(pageNumber);
         if (highlightLayer) {
           const reactRoot = createRoot(highlightLayer);

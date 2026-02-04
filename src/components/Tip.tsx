@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import styles from "../style/Tip.module.css";
 
+const EMOJI_OPTIONS = ["Section", "Subsection", "Question"] as const;
+
 interface Props {
   onConfirm: (comment: { text: string; emoji: string }) => void;
   onUpdate?: () => void;
@@ -25,7 +27,7 @@ export function Tip({ onConfirm, onUpdate }: Props) {
     >
       <div>
         <div>
-          {["Section", "Subsection", "Question"].map((_emoji) => (
+          {EMOJI_OPTIONS.map((_emoji) => (
             <label
               key={_emoji}
               style={{

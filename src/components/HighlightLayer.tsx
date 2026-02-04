@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { PDFViewer } from "pdfjs-dist/web/pdf_viewer.mjs";
 import { viewportToScaled } from "../lib/coordinates";
 import type {
@@ -55,6 +56,30 @@ export function HighlightLayer<T_HT extends IHighlight>({
   setTip,
 }: HighlightLayerProps<T_HT>) {
   const currentHighlights = highlightsByPage[String(pageNumber)] || [];
+  const tipShownRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    // Defer showing tip until after render to avoid side-effect during render
+    if (tip) {
+      const highlightId = String(tip.highlight.id);
+      if (!tipShownRef.current.has(highlightId)) {
+        const highlight = currentHighlights.find((h) => String(h.id) === highlightId);
+        if (highlight) {
+          const viewportHighlight: T_ViewportHighlight<T_HT> = {
+            ...highlight,
+            position: scaledPositionToViewport(highlight.position),
+          };
+          tipShownRef.current.add(highlightId);
+          showTip(tip.highlight, tip.callback(viewportHighlight));
+        }
+      }
+    }
+    // Reset tip shown tracking when tip changes to null
+    if (!tip) {
+      tipShownRef.current.clear();
+    }
+  }, [tip, currentHighlights, scaledPositionToViewport, showTip]);
+
   return (
     <div>
       {currentHighlights.map((highlight, index) => {
@@ -62,10 +87,6 @@ export function HighlightLayer<T_HT extends IHighlight>({
           ...highlight,
           position: scaledPositionToViewport(highlight.position),
         };
-
-        if (tip && tip.highlight.id === String(highlight.id)) {
-          showTip(tip.highlight, tip.callback(viewportHighlight));
-        }
 
         const isScrolledTo = Boolean(scrolledToHighlightId === highlight.id);
 

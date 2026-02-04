@@ -1,3 +1,4 @@
+import { memo } from "react";
 import styles from "../style/Highlight.module.css";
 import type { LTWHP } from "../types.js";
 
@@ -16,7 +17,7 @@ interface Props {
   isScrolledTo: boolean;
 }
 
-export function Highlight({
+export const Highlight = memo(function Highlight({
   position,
   onClick,
   onMouseOver,
@@ -59,4 +60,4 @@ export function Highlight({
       </div>
     </div>
   );
-}
+});

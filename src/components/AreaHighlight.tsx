@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Rnd } from "react-rnd";
 import { getPageFromElement } from "../lib/pdfjs-dom";
 import styles from "../style/AreaHighlight.module.css";
@@ -9,7 +10,7 @@ interface Props {
   isScrolledTo: boolean;
 }
 
-export function AreaHighlight({
+export const AreaHighlight = memo(function AreaHighlight({
   highlight,
   onChange,
   isScrolledTo,
@@ -57,4 +58,4 @@ export function AreaHighlight({
       />
     </div>
   );
-}
+});

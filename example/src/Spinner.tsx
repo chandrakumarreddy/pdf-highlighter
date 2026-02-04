@@ -1,6 +1,7 @@
+import { memo } from "react";
 import "./style/Spinner.css";
 
-export function Spinner() {
+export const Spinner = memo(function Spinner() {
   return (
     <div
       style={{
@@ -25,4 +26,4 @@ export function Spinner() {
       </div>
     </div>
   );
-}
+});
